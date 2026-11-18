@@ -1,4 +1,4 @@
-// Vertical conversion layouts. Never stretches footage. Static crop position only — no subject tracking is implemented.
+// Vertical conversion layouts. Never stretches footage. 'follow' uses motion tracking (track-engine.js), which follows moving regions, not recognised objects.
 import { clamp } from './utils.js';
 import { STEP } from './engagement-scorer.js';
 
@@ -6,6 +6,7 @@ export const SAFE = { top: 0.1, bottom: 0.22, left: 0.06, right: 0.14 }; // frac
 export const CROP_MODES = {
   center: { label: 'Center crop', desc: 'Fills 9:16 from the centre of the frame.' },
   adjustable: { label: 'Adjustable crop', desc: 'Same fill, but you choose the horizontal position (static — not subject tracking).' },
+  follow: { label: 'Follow subject (motion tracking)', desc: 'Pans the 9:16 window to follow the main moving subject, using measured motion between frames. It does not recognise what the object is.' },
   original: { label: 'Original aspect', desc: 'Whole frame, letterboxed on black. Nothing is cropped.' },
   blur: { label: 'Blurred background', desc: 'Whole frame over a blurred, zoomed copy of itself.' },
 };
@@ -28,7 +29,7 @@ export function computeLayout(mode, sw, sh, ow, oh, cropX = 0.5, zoom = 1) {
 let blurCanvas = null;
 export function drawLayout(ctx, video, L) {
   const { ow, oh } = L;
-  if (L.mode !== 'center' && L.mode !== 'adjustable') { ctx.fillStyle = '#000'; ctx.fillRect(0, 0, ow, oh); }
+  if (L.mode !== 'center' && L.mode !== 'adjustable' && L.mode !== 'follow') { ctx.fillStyle = '#000'; ctx.fillRect(0, 0, ow, oh); }
   if (L.bg) {
     if (!blurCanvas) blurCanvas = document.createElement('canvas');
     blurCanvas.width = 36; blurCanvas.height = Math.round(36 * (oh / ow));

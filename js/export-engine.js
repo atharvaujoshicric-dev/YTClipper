@@ -1,5 +1,6 @@
 // Export engine: canvas compositor → MediaRecorder (MP4 natively where supported, otherwise WebM),
 // optional FFmpeg.wasm transcode to H.264/AAC MP4, strict output verification, cover frames, metadata templates, ZIP.
+import { ensureTrack } from './track-engine.js';
 import { getMediaUrl } from './state.js';
 import { loadVideo, disposeVideo, seekTo, clamp, bus, fmtTime, safeName } from './utils.js';
 import { renderFrame } from './compositor.js';
@@ -150,6 +151,7 @@ export async function verifyOutput(blob, { w, h, duration, expectAudio }) {
 export async function exportClip(hl, proj, opts, cb = {}) {
   const [w, h] = opts.resolution.split('x').map(Number); const fps = opts.fps || 30; const bitrate = w >= 1080 ? 8e6 : 5e6;
   const { onStage, onProgress, signal } = cb; const warnings = [];
+  if (hl.crop?.mode === 'follow' && !(hl.track && hl.track.from === hl.start && hl.track.to === hl.end)) { onStage?.('Tracking subject'); await ensureTrack(hl, proj, { signal, onProgress: (p) => onProgress?.(p * 0.1) }); }
   onStage?.('Rendering'); const r = await renderClip(hl, proj, { w, h, fps, format: opts.format, bitrate }, { onProgress: (p) => onProgress?.(p * (opts.format === 'mp4' && !nativeMp4Mime() ? 0.55 : 0.9)), signal });
   warnings.push(...r.warnings); let { blob, ext, mime } = r;
   if (opts.format === 'mp4' && ext === 'webm') {

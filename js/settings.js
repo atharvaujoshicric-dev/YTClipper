@@ -21,7 +21,7 @@ export const DEFAULTS = {
   // export
   exportResolution: '1080x1920', exportFormat: 'mp4', aspectRatio: '9:16', exportFps: 30, platform: 'both', cropMode: 'center',
   // live capture
-  captureQuality: '1080p30', bufferMaxMB: 1500, liveAudio: true, liveMic: false,
+  captureQuality: '1080p30', bufferMaxMB: 1500, liveAudio: true, liveAutoExport: true, liveMic: false,
   // storage
   storeMediaMaxMB: 400, audioDecodeMaxMB: 600,
   onboarded: false,
@@ -150,14 +150,15 @@ export function mount(root) {
         field('Export resolution', sel('exportResolution', [['1080x1920', '1080 × 1920 (Full HD)'], ['720x1280', '720 × 1280 (faster)']])),
         field('Export format', sel('exportFormat', [['mp4', 'MP4 (H.264 + AAC) — WebM fallback'], ['webm', 'WebM (fastest, always works)']])),
         field('Aspect ratio', sel('aspectRatio', [['9:16', '9:16 vertical']])),
-        field('Default crop mode', sel('cropMode', [['center', 'Center crop'], ['adjustable', 'Adjustable crop'], ['original', 'Original aspect (fit)'], ['blur', 'Blurred background']])),
+        field('Default crop mode', sel('cropMode', [['center', 'Center crop'], ['follow', 'Follow subject (motion tracking)'], ['adjustable', 'Adjustable crop'], ['original', 'Original aspect (fit)'], ['blur', 'Blurred background']])),
         field('Preferred platform', sel('platform', [['both', 'Instagram Reels + YouTube Shorts'], ['reels', 'Instagram Reels'], ['shorts', 'YouTube Shorts']]))),
         h('div', { class: 'row', style: { marginTop: '12px' } }, chk('captionsEnabled', 'Captions on by default'), chk('captionOutline', 'Black outline'), chk('captionBox', 'Background box'), chk('captionHighlight', 'Word highlighting'))),
       h('div', { class: 'card pad' }, h('div', { class: 'card-head' }, h('h3', {}, 'Live capture')), h('div', { class: 'set-grid' },
         field('Capture quality', sel('captureQuality', [['720p30', '720p · 30 fps'], ['1080p30', '1080p · 30 fps'], ['1080p60', '1080p · 60 fps']])),
         field('Rolling buffer cap (MB)', num('bufferMaxMB', 100, 8000, 50), 'Oldest unprotected chunks are evicted above this.'),
         field('Keep source video in browser if ≤ (MB)', num('storeMediaMaxMB', 0, 4000, 50), 'Larger files stay in memory only; you re-link them after reload.'),
-        field('Full audio decode up to (MB)', num('audioDecodeMaxMB', 1, 4000, 50), 'Bigger files use slower real-time (2×) audio analysis to save memory.'))),
+        field('Full audio decode up to (MB)', num('audioDecodeMaxMB', 1, 4000, 50), 'Bigger files use slower real-time (2×) audio analysis to save memory.')),
+        h('div', { style: { marginTop: '12px' } }, chk('liveAutoExport', 'Auto-export live clips to 9:16 MP4', 'Each clip cut during a live capture is tracked, rendered and verified automatically so it is ready to download. Uses CPU while capturing.'))),
       h('div', { class: 'card pad' }, h('div', { class: 'card-head' }, h('h3', {}, 'FFmpeg.wasm')), ffBox),
       h('div', { class: 'card pad' }, h('div', { class: 'card-head' }, h('h3', {}, 'Local storage')), stor)));
   return () => {};

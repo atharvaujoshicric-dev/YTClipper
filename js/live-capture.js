@@ -1,5 +1,5 @@
 // Live Clipper: authorised screen capture via getDisplayMedia + MediaRecorder, rolling buffer, live analysis, flagged moments.
-import { h, icon, fmtBytes, fmtTime, toast, confirmDialog, emptyState, loadVideo, disposeVideo, clamp, uid, downloadBlob } from './utils.js';
+import { h, icon, fmtBytes, fmtTime, toast, confirmDialog, emptyState, bus, loadVideo, disposeVideo, clamp, uid, downloadBlob } from './utils.js';
 import { state, newProject, attachMedia, saveProject, saveTimeline, setCurrentProject, setProcessing, endProcessing, addHistory, setCurrentProject as setCur, saveHighlights, highlightsOf } from './state.js';
 import { LiveAudioAnalyzer, AUDIO_STEP } from './audio-analyzer.js';
 import { VisualExtractor, makeSampler, VIS_KEYS } from './visual-analyzer.js';
@@ -8,7 +8,8 @@ import { SpeechMonitor, speechSupported } from './speech-analyzer.js';
 import { detectHighlights, manualHighlight } from './highlight-detector.js';
 import { finishDetection } from './analyze.js';
 import { rightsNotice, RIGHTS_TEXT } from './video-upload.js';
-import { generateHooks } from './hook-intelligence.js';
+import { generateHooks, overlaySuggestions } from './hook-intelligence.js';
+import { categoryLabel } from './event-classifier.js';
 import { grabFrame } from './visual-analyzer.js';
 import { STEP } from './engagement-scorer.js';
 
@@ -47,6 +48,8 @@ function pickMime() {
 let session = null; // survives view changes so capture continues while you browse
 
 export function mount(root) {
+  let jobOf = () => null, dlJob = () => {};
+  import('./export-center.js').then((ex) => { jobOf = ex.jobFor; dlJob = ex.downloadJob; });
   const supported = !!(navigator.mediaDevices?.getDisplayMedia && window.MediaRecorder);
   const rights = h('input', { type: 'checkbox', onchange: sync });
   const startBtn = h('button', { class: 'btn primary', onclick: start }, icon('rec', 'sm'), 'Start capture');
@@ -88,13 +91,12 @@ export function mount(root) {
           h('label', { class: 'check' }, sttToggle, h('span', {}, 'Detect spoken reactions (Web Speech API, uses your microphone) ', !speechSupported() ? h('span', { class: 'tag red' }, 'not supported here') : null)),
           h('div', { class: 'help' }, `Pre-roll ${state.settings.preRoll}s · post-roll ${state.settings.postRoll}s · buffer cap ${state.settings.bufferMaxMB} MB (change in Settings).`), warnBox),
         h('div', { class: 'card pad stack' }, h('div', { class: 'card-head' }, h('h3', {}, 'Signals')), h('div', { class: 'small muted' }, 'Audio level'), vu, speechBox)))].filter(Boolean));
-  sync();
-
-  // reattach to a running session
-  if (session) attach();
   function sync() { startBtn.disabled = !supported || !rights.checked || !!session; pauseBtn.disabled = stopBtn.disabled = flagBtn.disabled = !session; }
   const setStatus = (t) => { const e = document.getElementById('cap-status'); if (e) e.textContent = t; };
   const warn = (msg, cls = 'warn') => { warnBox.append(h('div', { class: 'notice ' + cls + ' small' }, icon('warn', 'sm'), msg)); };
+  const offQ = bus.on('exportq', () => { if (session) renderFlags(session); });
+  sync();
+  if (session) attach(); // reattach to a running session
 
   async function start() {
     if (session) return; warnBox.innerHTML = '';
@@ -194,16 +196,31 @@ export function mount(root) {
     let hl;
     if (f.hl) { hl = { ...f.hl, id: uid('hl'), projectId: p.id, createdAt: Date.now() }; } else { hl = manualHighlight(tl, f.eventStart, state.settings, state.prefs, p.id); }
     Object.assign(hl, generateHooks(hl, tl, state.settings, state.prefs));
+    // on-screen text: hook line for the first 3 s (a creative template unless a heard phrase exists) + category tag; captions only from speech actually heard
+    const sug = overlaySuggestions(hl, tl)[0];
+    hl.overlays = [];
+    if (sug) hl.overlays.push({ id: uid('ov'), isHook: true, text: sug.text, x: 0.5, y: 0.2, size: 84, color: '#ffffff', outline: true, shadow: true, box: false, outStart: 0, outEnd: 3, creative: sug.source !== 'speech' });
+    if (hl.category && hl.category !== 'review') hl.overlays.push({ id: uid('ov'), text: categoryLabel(hl.category).toUpperCase(), x: 0.5, y: 0.1, size: 44, color: '#ffb020', outline: true, shadow: true, box: true, outStart: 0, outEnd: null });
+    hl.captions = (tl.speech?.segments || []).filter((g) => g.text && g.end > hl.start && g.t < hl.end).map((g) => ({ id: uid('cap'), start: Math.max(hl.start, g.t), end: Math.min(hl.end, g.end), text: g.text }));
     let v = null;
     try { v = await loadVideo(await getMediaUrl(p.id)); hl.thumb = await grabFrame(v, clamp(hl.peak, cs, ce - 0.2)); p.thumb = hl.thumb; f.thumb = hl.thumb; } catch { hl.thumb = null; } finally { if (v) disposeVideo(v); }
     await saveHighlights([hl]); p.analyzedAt = Date.now(); await saveProject(p);
-    f.projectId = p.id; f.hlId = hl.id; await addHistory('capture', 'success', `Live clip cut at ${fmtTime(f.eventStart)}`, p);
+    hl.crop = { mode: 'follow', x: 0.5 };
+    if (state.settings.liveAutoExport !== false) hl.status = 'approved';
+    await saveHighlights([hl]);
+    f.projectId = p.id; f.hlId = hl.id;
+    if (state.settings.liveAutoExport !== false) { const ex = await import('./export-center.js'); jobOf = ex.jobFor; dlJob = ex.downloadJob; ex.enqueueClip(hl); }
+    await addHistory('capture', 'success', `Live clip cut at ${fmtTime(f.eventStart)}`, p);
   }
   function renderFlags(S) {
     flagList.innerHTML = '';
     if (!S.flagged.length) return flagList.append(h('div', { class: 'help' }, 'Nothing flagged yet. Moments appear here as the engine detects them (a few seconds after they happen).'));
     [...S.flagged].reverse().forEach((f) => {
-      const st = f.clip === 'ready' ? h('span', { class: 'row' }, h('a', { class: 'btn sm primary', href: '#/editor', onclick: () => { state.currentProjectId = f.projectId; state.currentHighlightId = f.hlId; } }, 'Edit'), h('a', { class: 'btn sm', href: '#/highlights', onclick: () => { state.currentProjectId = f.projectId; } }, 'Review'))
+      const job = f.hlId ? jobOf(f.hlId) : null;
+      const dl = job?.status === 'done' ? h('button', { class: 'btn sm primary', onclick: () => dlJob(job) }, icon('download', 'sm'), 'Download 9:16 MP4')
+        : job && job.status !== 'failed' && job.status !== 'cancelled' ? h('span', { class: 'tag orange' }, `${job.stage}${job.progress ? ' ' + Math.round(job.progress * 100) + '%' : ''}`)
+        : job ? h('span', { class: 'tag red', 'data-tip': job.error || '' }, 'export failed — retry in Export Center') : null;
+      const st = f.clip === 'ready' ? h('span', { class: 'row' }, dl, h('a', { class: 'btn sm', href: '#/editor', onclick: () => { state.currentProjectId = f.projectId; state.currentHighlightId = f.hlId; } }, 'Edit'), h('a', { class: 'btn sm', href: '#/highlights', onclick: () => { state.currentProjectId = f.projectId; } }, 'Review'))
         : f.clip === 'failed' ? h('span', { class: 'tag red', 'data-tip': f.err || '' }, 'clip failed')
         : h('span', { class: 'tag' }, f.clip === 'cutting' ? 'cutting clip…' : 'clip when moment ends');
       flagList.append(h('div', { class: 'list-item' }, f.thumb ? h('div', { class: 'thumb', style: { backgroundImage: `url(${f.thumb})` } }) : null, h('span', { class: 'tag ' + (f.score >= 80 ? 'red' : 'orange') }, f.score != null ? f.score : 'manual'), h('div', { class: 'li-main' }, h('div', { class: 't' }, `${fmtTime(f.eventStart)} · ${f.category}`), h('div', { class: 'm' }, f.why)), st));
@@ -214,7 +231,7 @@ export function mount(root) {
     vu.firstChild.style.width = Math.min(100, S.level * 260) + '%';
     const st = S.buffer.stats(); bufStats.textContent = `${st.count} chunks · ${fmtBytes(st.bytes)} of ${fmtBytes(S.buffer.maxBytes)} cap · ${st.protectedCount} protected · ${st.evicted} evicted${st.overflow ? ' · ⚠ cap reached (protected chunks kept)' : ''}`;
     bufBar.innerHTML = ''; const last = S.buffer.chunks.slice(-80); last.forEach((c) => bufBar.append(h('i', { class: c.header ? 'head' : c.prot ? 'prot' : '' })));
-    setProcessing({ label: (S.paused ? 'Capture paused ' : 'Live capture ') + fmtTime(S.elapsed()), pct: 0 });
+    if (!state.processing.active) setProcessing({ active: true, label: (S.paused ? 'Capture paused ' : 'Live capture ') + fmtTime(S.elapsed()), pct: 0, cancel: null, error: null });
   }
   function attach() {
     const S = session; if (!S) return;
@@ -275,6 +292,6 @@ export function mount(root) {
   }
   async function getUrl(p) { const { getMediaUrl } = await import('./state.js'); return { url: await getMediaUrl(p.id) }; }
 
-  return () => { /* keep capture session alive when navigating away */ };
+  return () => { offQ(); /* keep capture session alive when navigating away */ };
 }
 export const isCapturing = () => !!session;

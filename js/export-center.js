@@ -9,6 +9,14 @@ import { exportSelection } from './highlights.js';
 const queue = []; let running = false; let abortCtl = null;
 export const queueState = () => ({ running, jobs: queue });
 
+/** Queue one clip from outside the Export Center (used by Live Clipper auto-export). */
+export function enqueueClip(hl) {
+  const prior = queue.find((j) => j.hlId === hl.id && ['queued', 'rendering', 'encoding', 'verifying'].includes(j.status)); if (prior) return prior;
+  const job = { id: uid('job'), hlId: hl.id, projectId: hl.projectId, title: hl.title, thumb: hl.thumb, status: 'queued', stage: 'Queued', progress: 0, coverTime: hl.coverTime ?? hl.peak };
+  queue.push(job); bus.emit('exportq'); runQueue(); return job;
+}
+export const jobFor = (hlId) => queue.find((j) => j.hlId === hlId);
+export const downloadJob = (j) => downloadBlob(j.result.blob, j.filename);
 function filenameFor(job, ext) { return `${safeName(job.title)}_${job.hlId.slice(-5)}.${ext}`; }
 
 async function runQueue() {
