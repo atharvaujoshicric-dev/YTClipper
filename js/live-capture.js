@@ -63,6 +63,13 @@ export function mount(root) {
   const quality = h('select', {}, Object.keys(QUALITY).map((k) => h('option', { value: k, selected: state.settings.captureQuality === k }, k)));
   const audioChk = h('input', { type: 'checkbox', checked: state.settings.liveAudio });
 
+  const streamUrl = h('input', { type: 'url', placeholder: 'https://www.youtube.com/watch?v=…', style: { flex: '1' } });
+  const openStream = () => {
+    let u; try { u = new URL(streamUrl.value.trim()); } catch { toast('Enter a full link starting with https://', 'error'); return; }
+    if (!/^https?:$/.test(u.protocol)) { toast('Only http(s) links can be opened.', 'error'); return; }
+    window.open(u.href, '_blank', 'noopener,noreferrer');
+    toast('Opened in a new tab. Come back here, press Start capture, and pick that tab with “Share tab audio”.', 'info', 9000);
+  };
   root.append(
     h('div', { class: 'view-head fade-in' }, h('div', {}, h('h1', {}, icon('live'), 'Live Clipper'), h('p', { class: 'sub' }, 'Capture a browser tab, window or screen you are authorised to record. ClipForge records in your browser, analyses it as it plays, and flags moments while keeping them safe in a bounded rolling buffer.'))),
     !supported ? h('div', { class: 'notice err' }, icon('warn'), 'Screen capture (getDisplayMedia) or MediaRecorder is not available. Use a current desktop Chrome, Edge or Firefox over HTTPS (or localhost). Mobile browsers generally cannot capture screens.') : null,
@@ -71,6 +78,9 @@ export function mount(root) {
         h('div', { class: 'card pad stack' }, h('div', { class: 'card-head' }, h('h3', {}, 'Rolling buffer')), bufBar, bufStats, h('div', { class: 'help' }, 'Orange = chunks protected because they belong to a flagged moment (± pre/post-roll). Blue = header chunk. Old unprotected chunks are evicted only when the buffer cap is exceeded.')),
         h('div', { class: 'card pad' }, h('div', { class: 'card-head' }, h('h3', {}, 'Flagged moments (live)')), flagList)),
       h('div', { class: 'stack' },
+        h('div', { class: 'card pad stack' }, h('div', { class: 'card-head' }, h('h3', {}, 'Stream link (optional)')),
+          h('div', { class: 'help' }, 'ClipForge cannot download a stream from a link. Open it in its own tab, then choose that tab (with “Share tab audio”) when you press Start capture.'),
+          h('div', { class: 'row' }, streamUrl, h('button', { class: 'btn', onclick: openStream }, 'Open in new tab'))),
         h('div', { class: 'card pad stack' }, h('div', { class: 'card-head' }, h('h3', {}, 'Before you start')),
           h('label', { class: 'check' }, rights, h('span', {}, RIGHTS_TEXT)), rightsNotice(),
           h('label', { class: 'field' }, h('span', { class: 'lbl' }, 'Capture quality'), quality),

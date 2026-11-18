@@ -22,7 +22,14 @@ python3 -m http.server 8000
 
 All paths are relative, so it works under a repo subpath.
 
+## Deploy to Vercel
+1. Push the folder to GitHub (or run `npx vercel` inside it).
+2. In Vercel: **Add New → Project**, import the repo. Framework preset: **Other**. Build command: empty. Output directory: `.` (root).
+3. Deploy. `vercel.json` sets safe headers and allows screen capture. HTTPS is automatic, which live capture requires.
+
 ## Live capture permissions
+The app cannot download from a stream link. Paste the link in the "Stream link" box to open it in a tab, then capture that tab with "Share tab audio".
+
 "Live Clipper" uses `getDisplayMedia`. The browser asks you to choose a tab/window/screen; tick **Share tab audio** (Chrome/Edge) to capture sound. Needs HTTPS or localhost. Stopping the share in the browser auto-finalises the recording. The rolling buffer is capped (Settings) and flagged moments are protected from eviction.
 
 ## Browser compatibility
