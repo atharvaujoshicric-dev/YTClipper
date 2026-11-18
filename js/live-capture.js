@@ -70,8 +70,8 @@ export function mount(root) {
     window.open(u.href, '_blank', 'noopener,noreferrer');
     toast('Opened in a new tab. Come back here, press Start capture, and pick that tab with “Share tab audio”.', 'info', 9000);
   };
-  root.append(
-    h('div', { class: 'view-head fade-in' }, h('div', {}, h('h1', {}, icon('live'), 'Live Clipper'), h('p', { class: 'sub' }, 'Capture a browser tab, window or screen you are authorised to record. ClipForge records in your browser, analyses it as it plays, and flags moments while keeping them safe in a bounded rolling buffer.'))),
+  root.append(...[
+    h('div', { class: 'view-head fade-in' }, h('div', {}, h('h1', {}, icon('live'), 'Live Clipper'), h('p', { class: 'sub' }, 'Share the tab with your live stream once. ClipForge watches it live and cuts a clip for each detected moment a few seconds after it ends. No need to press Stop. Only record streams you own or have permission to clip.'))),
     !supported ? h('div', { class: 'notice err' }, icon('warn'), 'Screen capture (getDisplayMedia) or MediaRecorder is not available. Use a current desktop Chrome, Edge or Firefox over HTTPS (or localhost). Mobile browsers generally cannot capture screens.') : null,
     h('div', { class: 'grid', style: { gridTemplateColumns: 'minmax(0,2fr) minmax(280px,1fr)' } },
       h('div', { class: 'stack' }, stage, h('div', { class: 'row' }, startBtn, pauseBtn, stopBtn, flagBtn, h('span', { class: 'spacer' }), h('span', { class: 'small muted', id: 'cap-status' }, 'Idle')),
@@ -87,7 +87,7 @@ export function mount(root) {
           h('label', { class: 'check' }, audioChk, h('span', {}, 'Request audio ', h('span', { class: 'help' }, '(tick “Share audio” in the browser picker)'))),
           h('label', { class: 'check' }, sttToggle, h('span', {}, 'Detect spoken reactions (Web Speech API, uses your microphone) ', !speechSupported() ? h('span', { class: 'tag red' }, 'not supported here') : null)),
           h('div', { class: 'help' }, `Pre-roll ${state.settings.preRoll}s · post-roll ${state.settings.postRoll}s · buffer cap ${state.settings.bufferMaxMB} MB (change in Settings).`), warnBox),
-        h('div', { class: 'card pad stack' }, h('div', { class: 'card-head' }, h('h3', {}, 'Signals')), h('div', { class: 'small muted' }, 'Audio level'), vu, speechBox))));
+        h('div', { class: 'card pad stack' }, h('div', { class: 'card-head' }, h('h3', {}, 'Signals')), h('div', { class: 'small muted' }, 'Audio level'), vu, speechBox)))].filter(Boolean));
   sync();
 
   // reattach to a running session
@@ -131,6 +131,7 @@ export function mount(root) {
       S.speech.mon.start();
     } else sttStatus(speechSupported() ? 'Speech detection is off.' : 'Speech recognition is not supported in this browser — using voice-band loudness as a reaction proxy.');
     S.ui = setInterval(() => ui(S), 250);
+    S.clipTimer = setInterval(() => clipPump(S), 2000);
     setProcessing({ active: true, label: 'Live capture running', pct: 0, cancel: null, error: null });
     video.srcObject = stream; video.play().catch(() => {});
     addHistory('capture', 'started', 'Live capture started', null);
@@ -158,7 +159,7 @@ export function mount(root) {
       const res = detectHighlights(tl, { ...state.settings, maxCandidates: 50 }, state.prefs, { projectId: 'live', minAgeSec: 2 });
       for (const hl of res.highlights) {
         if (S.flagged.some((f) => Math.abs(f.eventStart - hl.eventStart) < 6)) continue;
-        S.flagged.push({ eventStart: hl.eventStart, start: hl.start, end: hl.end, score: hl.score, category: hl.category, why: hl.reasons[0] || '' });
+        S.flagged.push({ eventStart: hl.eventStart, start: hl.start, end: hl.end, score: hl.score, category: hl.category, why: hl.reasons[0] || '', hl, clip: 'pending' });
         S.buffer.protect(hl.start, hl.end); renderFlags(S);
       }
     } catch (e) { console.warn('live detect', e); }
@@ -166,12 +167,47 @@ export function mount(root) {
   function markNow() {
     const S = session; if (!S) return; const t = S.elapsed(); const from = Math.max(0, t - state.settings.preRoll);
     S.manual.push(t); S.buffer.protect(from, t + state.settings.postRoll);
-    S.flagged.push({ eventStart: t, start: from, end: t + state.settings.postRoll, score: null, category: 'manual', why: 'Marked manually' }); renderFlags(S); toast('Moment marked and protected in the buffer.', 'success', 2000);
+    S.flagged.push({ eventStart: t, start: from, end: t + state.settings.postRoll, score: null, category: 'manual', why: 'Marked manually', manual: true, clip: 'pending' }); renderFlags(S); toast('Moment marked and protected in the buffer.', 'success', 2000);
+  }
+  /** Cut finished moments out of the rolling buffer into their own clip projects while the capture keeps running. */
+  async function clipPump(S) {
+    if (S.cutting || S.ended || S.paused) return;
+    const f = S.flagged.find((x) => x.clip === 'pending' && S.elapsed() >= x.end + 3);
+    if (!f) return;
+    S.cutting = true; f.clip = 'cutting'; renderFlags(S);
+    try { await cutClip(S, f); f.clip = 'ready'; toast(`Clip ready at ${fmtTime(f.eventStart)}${f.score != null ? ' · score ' + f.score : ''}. Find it in the list or in AI Highlights.`, 'success', 5000); }
+    catch (e) { console.warn('clip cut', e); f.clip = 'failed'; f.err = e.message; }
+    finally { S.cutting = false; renderFlags(S); }
+  }
+  async function cutClip(S, f) {
+    const { getMediaUrl, getTimeline } = await import('./state.js');
+    const cs = Math.max(0, f.start - 2), ce = Math.min(S.elapsed(), f.end + 2);
+    const head = S.buffer.chunks[0]; if (!head) throw new Error('buffer is empty');
+    const body = S.buffer.chunks.filter((c) => !c.header && c.t1 > cs && c.t0 < ce);
+    if (!body.length) throw new Error('that part of the recording is no longer in the buffer');
+    const blob = new Blob([head.blob, ...body.map((c) => c.blob)], { type: S.mime });
+    const ext = S.mime.includes('mp4') ? 'mp4' : 'webm';
+    const file = new File([blob], `live-clip-${Math.round(f.eventStart)}s.${ext}`, { type: S.mime });
+    const tl = snapshotTL(S);
+    const p = newProject({ name: `Live clip ${fmtTime(f.eventStart)} · ${new Date().toLocaleTimeString()}`, source: 'live', liveClip: true, filename: file.name, size: file.size, mime: S.mime, duration: ce, width: S.dims.w, height: S.dims.h, fps: S.q.fps, hasAudio: S.audio.available, rights: true, rightsAt: Date.now(), status: 'analyzed', stats: { highlights: 1 }, analysisInfo: { audio: tl.audio.available ? { available: true, method: 'live' } : { available: false, reason: tl.audio.reason }, visual: { available: true, interval: STEP }, speech: tl.speech.available ? { available: true, segments: tl.speech.segments.length } : { available: false, reason: 'Speech detection was off or unsupported.' } } });
+    await attachMedia(p, file); tl.projectId = p.id; await saveTimeline(tl);
+    let hl;
+    if (f.hl) { hl = { ...f.hl, id: uid('hl'), projectId: p.id, createdAt: Date.now() }; } else { hl = manualHighlight(tl, f.eventStart, state.settings, state.prefs, p.id); }
+    Object.assign(hl, generateHooks(hl, tl, state.settings, state.prefs));
+    let v = null;
+    try { v = await loadVideo(await getMediaUrl(p.id)); hl.thumb = await grabFrame(v, clamp(hl.peak, cs, ce - 0.2)); p.thumb = hl.thumb; f.thumb = hl.thumb; } catch { hl.thumb = null; } finally { if (v) disposeVideo(v); }
+    await saveHighlights([hl]); p.analyzedAt = Date.now(); await saveProject(p);
+    f.projectId = p.id; f.hlId = hl.id; await addHistory('capture', 'success', `Live clip cut at ${fmtTime(f.eventStart)}`, p);
   }
   function renderFlags(S) {
     flagList.innerHTML = '';
     if (!S.flagged.length) return flagList.append(h('div', { class: 'help' }, 'Nothing flagged yet. Moments appear here as the engine detects them (a few seconds after they happen).'));
-    [...S.flagged].reverse().forEach((f) => flagList.append(h('div', { class: 'list-item' }, h('span', { class: 'tag ' + (f.score >= 80 ? 'red' : 'orange') }, f.score != null ? f.score : 'manual'), h('div', { class: 'li-main' }, h('div', { class: 't' }, `${fmtTime(f.eventStart)} · ${f.category}`), h('div', { class: 'm' }, f.why)))));
+    [...S.flagged].reverse().forEach((f) => {
+      const st = f.clip === 'ready' ? h('span', { class: 'row' }, h('a', { class: 'btn sm primary', href: '#/editor', onclick: () => { state.currentProjectId = f.projectId; state.currentHighlightId = f.hlId; } }, 'Edit'), h('a', { class: 'btn sm', href: '#/highlights', onclick: () => { state.currentProjectId = f.projectId; } }, 'Review'))
+        : f.clip === 'failed' ? h('span', { class: 'tag red', 'data-tip': f.err || '' }, 'clip failed')
+        : h('span', { class: 'tag' }, f.clip === 'cutting' ? 'cutting clip…' : 'clip when moment ends');
+      flagList.append(h('div', { class: 'list-item' }, f.thumb ? h('div', { class: 'thumb', style: { backgroundImage: `url(${f.thumb})` } }) : null, h('span', { class: 'tag ' + (f.score >= 80 ? 'red' : 'orange') }, f.score != null ? f.score : 'manual'), h('div', { class: 'li-main' }, h('div', { class: 't' }, `${fmtTime(f.eventStart)} · ${f.category}`), h('div', { class: 'm' }, f.why)), st));
+    });
   }
   function ui(S) {
     const e = document.getElementById('rec-time'); if (e) e.textContent = fmtTime(S.elapsed());
@@ -195,8 +231,8 @@ export function mount(root) {
 
   async function stop(auto) {
     const S = session; if (!S || S.ended) return; S.ended = true;
-    if (!auto && !(await confirmDialog('Stop capture?', 'The recording will be finalised and analysed for highlights.', { okText: 'Stop & analyse' }))) { S.ended = false; return; }
-    clearInterval(S.visual.timer); clearInterval(S.ui); S.speech.mon?.stop(); S.audio.analyzer?.stop();
+    if (!auto && !(await confirmDialog('Stop capture?', 'The full recording will be saved and analysed. Clips already cut during the capture are kept.', { okText: 'Stop & analyse' }))) { S.ended = false; return; }
+    clearInterval(S.visual.timer); clearInterval(S.ui); clearInterval(S.clipTimer); S.speech.mon?.stop(); S.audio.analyzer?.stop();
     if (S.paused) { S.pausedTotal += performance.now() - S.pausedAt; S.paused = false; }
     const finalT = S.elapsed();
     await new Promise((res) => { if (S.rec.state === 'inactive') return res(); S.rec.onstop = res; try { S.rec.stop(); } catch { res(); } });
