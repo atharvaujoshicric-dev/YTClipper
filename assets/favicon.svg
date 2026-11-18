@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="ClipForge logo">
+  <defs>
+    <linearGradient id="cfg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ff4d3a"/>
+      <stop offset="1" stop-color="#ff9a2e"/>
+    </linearGradient>
+    <linearGradient id="cfd" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1b1d22"/>
+      <stop offset="1" stop-color="#0c0d10"/>
+    </linearGradient>
+  </defs>
+  <rect x="2" y="2" width="60" height="60" rx="15" fill="url(#cfd)" stroke="#2c2f36" stroke-width="2"/>
+  <!-- anvil / forge block -->
+  <path d="M14 40h30l6-6H20l-6 6z" fill="url(#cfg)" opacity=".95"/>
+  <path d="M18 44h24v6H18z" fill="#3a3d45"/>
+  <!-- play spark -->
+  <path d="M27 14l17 10-17 10z" fill="url(#cfg)"/>
+  <!-- cut slash -->
+  <path d="M10 52L54 12" stroke="#0c0d10" stroke-width="3.2" stroke-linecap="round"/>
+  <circle cx="49" cy="17" r="2.4" fill="#ffd27a"/>
+</svg>

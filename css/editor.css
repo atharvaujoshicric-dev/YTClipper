@@ -1,0 +1,26 @@
+/* Clip editor */
+.editor{display:grid;grid-template-columns:minmax(300px,380px) minmax(0,1fr);gap:18px;align-items:start}
+.preview-wrap{position:sticky;top:0;display:flex;flex-direction:column;gap:10px}
+.phone{position:relative;width:100%;max-width:360px;margin:0 auto;aspect-ratio:9/16;background:#000;border-radius:22px;border:6px solid #1b1e24;box-shadow:0 0 0 1px var(--line-2),var(--shadow);overflow:hidden}
+.phone canvas{width:100%;height:100%;display:block}
+.safezone{position:absolute;inset:0;pointer-events:none}
+.safezone i{position:absolute;background:rgba(255,74,54,.14);border:1px dashed rgba(255,74,54,.55)}
+.transport{display:flex;gap:6px;justify-content:center;align-items:center;flex-wrap:wrap}
+.timecode{font-family:var(--mono);font-size:12px;color:var(--muted);min-width:110px;text-align:center}
+.timeline{position:relative;height:120px;background:#0b0c0f;border:1px solid var(--line);border-radius:12px;overflow:hidden;user-select:none;touch-action:none;cursor:crosshair}
+.timeline canvas{position:absolute;inset:0;width:100%;height:100%}
+.tl-handle{position:absolute;top:0;bottom:0;width:12px;margin-left:-6px;cursor:ew-resize;z-index:3}
+.tl-handle::after{content:"";position:absolute;left:5px;top:0;bottom:0;width:2px;background:var(--orange)}
+.tl-handle .grip{position:absolute;top:44px;left:0;width:12px;height:30px;background:var(--grad);border-radius:5px}
+.tl-play{position:absolute;top:0;bottom:0;width:2px;background:#fff;z-index:4;pointer-events:none;box-shadow:0 0 8px #fff}
+.tl-legend{display:flex;gap:14px;font-size:11px;color:var(--dim);flex-wrap:wrap}
+.tl-legend i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:5px;vertical-align:-1px}
+.ed-panel{padding:16px}
+.cap-row{display:grid;grid-template-columns:78px 78px 1fr auto;gap:6px;align-items:center;margin-bottom:6px}
+.cap-row input{padding:6px 8px}
+.ov-card{padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--card-2);margin-bottom:8px}
+.crop-modes{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}
+.crop-mode{padding:10px;border:1px solid var(--line-2);border-radius:10px;background:#12141a;cursor:pointer;text-align:left;color:var(--text);font:inherit}
+.crop-mode small{display:block;color:var(--dim);margin-top:2px}
+.crop-mode.on{border-color:var(--orange);background:var(--grad-soft)}
+.src-video{width:100%;border-radius:10px;background:#000;max-height:200px}

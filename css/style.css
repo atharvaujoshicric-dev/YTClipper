@@ -1,0 +1,76 @@
+/* GTA 6 ClipForge — design tokens, layout, topbar, sidebar */
+:root{
+  --bg:#0a0b0d; --bg-2:#101216; --card:#16181d; --card-2:#1b1e24; --line:#272b33; --line-2:#323741;
+  --text:#eceef2; --muted:#98a0ad; --dim:#6c7482;
+  --red:#ff4a36; --orange:#ff9a2e; --amber:#ffc24d; --green:#3ddc97; --blue:#4da3ff; --violet:#a78bfa;
+  --grad:linear-gradient(135deg,#ff4a36 0%,#ff9a2e 100%);
+  --grad-soft:linear-gradient(135deg,rgba(255,74,54,.18),rgba(255,154,46,.10));
+  --radius:14px; --radius-sm:9px; --shadow:0 10px 30px rgba(0,0,0,.45);
+  --sidebar-w:236px; --sidebar-w-collapsed:68px; --topbar-h:60px;
+  --font:"Inter","Segoe UI",system-ui,-apple-system,Roboto,"Helvetica Neue",Arial,sans-serif;
+  --font-display:"Bahnschrift","Oswald","Arial Narrow","Segoe UI",system-ui,sans-serif;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:radial-gradient(1200px 600px at 85% -10%,rgba(255,74,54,.10),transparent 60%),radial-gradient(900px 500px at -10% 110%,rgba(255,154,46,.07),transparent 60%),var(--bg);
+  color:var(--text);font:14px/1.5 var(--font);-webkit-font-smoothing:antialiased;overflow:hidden}
+a{color:inherit;text-decoration:none}
+h1,h2,h3,h4{margin:0;font-family:var(--font-display);letter-spacing:.02em}
+h1{font-size:26px} h2{font-size:19px} h3{font-size:15px} h4{font-size:13px}
+p{margin:0}
+.skip-link{position:absolute;left:-999px;top:0;background:#fff;color:#000;padding:8px 12px;z-index:999}
+.skip-link:focus{left:8px;top:8px}
+::selection{background:rgba(255,106,50,.4)}
+*::-webkit-scrollbar{width:10px;height:10px}
+*::-webkit-scrollbar-thumb{background:#2b2f38;border-radius:10px;border:2px solid transparent;background-clip:padding-box}
+*::-webkit-scrollbar-thumb:hover{background:#3a404c;background-clip:padding-box;border:2px solid transparent}
+:focus-visible{outline:2px solid var(--orange);outline-offset:2px;border-radius:6px}
+
+.ic{width:20px;height:20px;flex:none}
+.ic.sm{width:15px;height:15px}
+.ic.lg{width:26px;height:26px}
+
+/* Topbar */
+.topbar{position:fixed;inset:0 0 auto 0;height:var(--topbar-h);display:flex;align-items:center;gap:14px;padding:0 14px;
+  background:rgba(10,11,13,.82);backdrop-filter:blur(14px);border-bottom:1px solid var(--line);z-index:50}
+.brand{display:flex;align-items:center;gap:10px;font-family:var(--font-display);font-size:17px;letter-spacing:.14em;white-space:nowrap}
+.brand b{background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent;font-weight:700}
+.topbar-center{flex:1;display:flex;justify-content:center;min-width:0}
+.topbar-right{display:flex;align-items:center;gap:8px}
+.icon-btn{width:38px;height:38px;display:grid;place-items:center;border-radius:10px;border:1px solid transparent;background:transparent;color:var(--muted);cursor:pointer}
+.icon-btn:hover{background:var(--card-2);color:var(--text);border-color:var(--line)}
+.project-picker{display:flex;align-items:center;gap:8px;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:4px 10px;max-width:420px;width:100%}
+.pp-label{font-size:11px;text-transform:uppercase;letter-spacing:.1em;color:var(--dim)}
+.project-picker select{flex:1;min-width:0;background:transparent;border:0;color:var(--text);font:inherit;outline:none}
+.project-picker select option{background:#16181d}
+.status-chip{display:flex;align-items:center;gap:7px;height:34px;padding:0 11px;border-radius:999px;background:var(--card);border:1px solid var(--line);color:var(--muted);font:inherit;font-size:12px;cursor:pointer;position:relative;overflow:hidden;white-space:nowrap}
+.status-chip:hover{border-color:var(--line-2);color:var(--text)}
+.status-chip .dot{width:8px;height:8px;border-radius:50%;background:var(--dim)}
+.status-chip.busy .dot{background:var(--orange);box-shadow:0 0 0 0 rgba(255,154,46,.6);animation:pulse 1.4s infinite}
+.status-chip.ok .dot{background:var(--green)}
+.status-chip.err .dot{background:var(--red)}
+.chip-progress{position:absolute;left:0;right:0;bottom:0;height:2px;background:transparent}
+.chip-progress i{display:block;height:100%;width:0;background:var(--grad);transition:width .25s}
+@keyframes pulse{0%{box-shadow:0 0 0 0 rgba(255,154,46,.5)}70%{box-shadow:0 0 0 7px rgba(255,154,46,0)}100%{box-shadow:0 0 0 0 rgba(255,154,46,0)}}
+
+/* Layout */
+.layout{position:fixed;inset:var(--topbar-h) 0 0 0;display:flex}
+.sidebar{width:var(--sidebar-w);flex:none;border-right:1px solid var(--line);background:linear-gradient(180deg,#0e1013,#0b0c0f);padding:14px 10px;display:flex;flex-direction:column;gap:4px;overflow-y:auto;transition:width .22s ease}
+.main{flex:1;min-width:0;overflow-y:auto;padding:26px 30px 60px;scroll-behavior:smooth}
+body.sidebar-collapsed .sidebar{width:var(--sidebar-w-collapsed)}
+.nav-item{display:flex;align-items:center;gap:12px;padding:10px 12px;border-radius:10px;color:var(--muted);cursor:pointer;border:1px solid transparent;white-space:nowrap;overflow:hidden}
+.nav-item:hover{background:var(--card);color:var(--text)}
+.nav-item.active{background:var(--grad-soft);color:#fff;border-color:rgba(255,106,50,.35);box-shadow:inset 3px 0 0 var(--red)}
+.nav-item .nav-label{font-weight:500}
+.nav-item .nav-badge{margin-left:auto;font-size:11px;background:var(--grad);color:#150a05;border-radius:999px;padding:1px 7px;font-weight:700}
+body.sidebar-collapsed .nav-label,body.sidebar-collapsed .nav-badge,body.sidebar-collapsed .sidebar-foot{display:none}
+.sidebar-foot{margin-top:auto;font-size:11px;color:var(--dim);padding:10px 8px;line-height:1.5;border-top:1px solid var(--line)}
+
+.view-head{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;margin-bottom:22px;flex-wrap:wrap}
+.view-head .sub{color:var(--muted);margin-top:4px;max-width:760px}
+.view-head h1{display:flex;align-items:center;gap:10px}
+.view-head h1 .ic{color:var(--orange)}
+.view-actions{display:flex;gap:8px;flex-wrap:wrap}
+.fade-in{animation:fadeIn .25s ease both}
+@keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
