@@ -28,7 +28,7 @@ All paths are relative, so it works under a repo subpath.
 3. Deploy. `vercel.json` sets safe headers and allows screen capture. HTTPS is automatic, which live capture requires.
 
 ## Live capture permissions
-The app cannot download from a stream link. Paste the link in the "Stream link" box to open it in a tab, then capture that tab with "Share tab audio" (once). While capture runs, each detected moment is cut into its own clip a few seconds after it ends and appears in the Live Clipper list with Edit/Review buttons, so you do not need to press Stop. Stopping additionally saves the full recording as a project.
+The app cannot download from a stream link. Paste the link in the "Stream link" box to open it in a tab, then capture that tab with "Share tab audio" (once). While capture runs, each detected moment is cut into its own clip a few seconds after it ends and appears in the Live Clipper list with Edit/Review buttons, so you do not need to press Stop. If nothing stands out for a while (default 60 s, adjustable), it still cuts the best-scoring moment of that stretch and labels it low-evidence, so a quiet stream still produces clips. Finished clips have a Preview button and a 9:16 MP4 download. Stopping additionally saves the full recording as a project.
 
 "Live Clipper" uses `getDisplayMedia`. The browser asks you to choose a tab/window/screen; tick **Share tab audio** (Chrome/Edge) to capture sound. Needs HTTPS or localhost. Stopping the share in the browser auto-finalises the recording. The rolling buffer is capped (Settings) and flagged moments are protected from eviction.
 

@@ -1,6 +1,6 @@
 // Live Clipper: authorised screen capture via getDisplayMedia + MediaRecorder, rolling buffer, live analysis, flagged moments.
-import { h, icon, fmtBytes, fmtTime, toast, confirmDialog, emptyState, bus, loadVideo, disposeVideo, clamp, uid, downloadBlob } from './utils.js';
-import { state, newProject, attachMedia, saveProject, saveTimeline, setCurrentProject, setProcessing, endProcessing, addHistory, setCurrentProject as setCur, saveHighlights, highlightsOf } from './state.js';
+import { modal, h, icon, fmtBytes, fmtTime, toast, confirmDialog, emptyState, bus, loadVideo, disposeVideo, clamp, uid, downloadBlob } from './utils.js';
+import { saveSettings, state, newProject, attachMedia, saveProject, saveTimeline, setCurrentProject, setProcessing, endProcessing, addHistory, setCurrentProject as setCur, saveHighlights, highlightsOf } from './state.js';
 import { LiveAudioAnalyzer, AUDIO_STEP } from './audio-analyzer.js';
 import { VisualExtractor, makeSampler, VIS_KEYS } from './visual-analyzer.js';
 import { AUDIO_KEYS } from './dsp.js';
@@ -11,7 +11,7 @@ import { rightsNotice, RIGHTS_TEXT } from './video-upload.js';
 import { generateHooks, overlaySuggestions } from './hook-intelligence.js';
 import { categoryLabel } from './event-classifier.js';
 import { grabFrame } from './visual-analyzer.js';
-import { STEP } from './engagement-scorer.js';
+import { STEP, computeSignals, baseScoreSeries } from './engagement-scorer.js';
 
 /** Bounded rolling buffer of MediaRecorder chunks. Header chunk and chunks of flagged moments are never evicted. */
 export class RollingBuffer {
@@ -66,6 +66,8 @@ export function mount(root) {
   const quality = h('select', {}, Object.keys(QUALITY).map((k) => h('option', { value: k, selected: state.settings.captureQuality === k }, k)));
   const audioChk = h('input', { type: 'checkbox', checked: state.settings.liveAudio });
 
+  const fbChk = h('input', { type: 'checkbox', checked: state.settings.liveFallback !== false, onchange: () => saveSettings({ liveFallback: fbChk.checked }) });
+  const fbSec = h('input', { type: 'number', min: 20, max: 600, step: 10, value: state.settings.liveFallbackSec ?? 60, style: { width: '72px' }, onchange: () => saveSettings({ liveFallbackSec: Math.max(20, +fbSec.value || 60) }) });
   const streamUrl = h('input', { type: 'url', placeholder: 'https://www.youtube.com/watch?v=…', style: { flex: '1' } });
   const openStream = () => {
     let u; try { u = new URL(streamUrl.value.trim()); } catch { toast('Enter a full link starting with https://', 'error'); return; }
@@ -87,6 +89,7 @@ export function mount(root) {
         h('div', { class: 'card pad stack' }, h('div', { class: 'card-head' }, h('h3', {}, 'Before you start')),
           h('label', { class: 'check' }, rights, h('span', {}, RIGHTS_TEXT)), rightsNotice(),
           h('label', { class: 'field' }, h('span', { class: 'lbl' }, 'Capture quality'), quality),
+          h('label', { class: 'check' }, fbChk, h('span', {}, 'Always make a clip, even when nothing stands out: every ', fbSec, ' s of quiet, cut the best moment (labelled low-evidence)')),
           h('label', { class: 'check' }, audioChk, h('span', {}, 'Request audio ', h('span', { class: 'help' }, '(tick “Share audio” in the browser picker)'))),
           h('label', { class: 'check' }, sttToggle, h('span', {}, 'Detect spoken reactions (Web Speech API, uses your microphone) ', !speechSupported() ? h('span', { class: 'tag red' }, 'not supported here') : null)),
           h('div', { class: 'help' }, `Pre-roll ${state.settings.preRoll}s · post-roll ${state.settings.postRoll}s · buffer cap ${state.settings.bufferMaxMB} MB (change in Settings).`), warnBox),
@@ -147,19 +150,24 @@ export function mount(root) {
     VIS_KEYS.forEach((k) => { const a = S.visual.feats[k]; while (a.length < i) a.push(a.length ? a[a.length - 1] : 0); a[i] = f[k]; });
     if (S.elapsed() - S.lastDetect > Math.max(4, S.elapsed() / 300)) { S.lastDetect = S.elapsed(); liveDetect(S); }
   }
-  function snapshotTL(S) {
-    const n = Math.max(S.visual.feats.motion.length, S.audio.feats.rmsDb.length);
-    const fill = (arr, n_, d = 0) => { const o = new Float32Array(n_); for (let i = 0; i < n_; i++) o[i] = arr[i] ?? d; return o; };
-    const tl = { projectId: 'live', step: STEP, duration: n * STEP, speech: { available: S.speech.segs.length > 0 || !!S.speech.mon, segments: S.speech.segs.slice() } };
-    tl.audio = S.audio.available ? { available: true, method: 'live', ...Object.fromEntries(AUDIO_KEYS.map((k) => [k, fill(S.audio.feats[k], n, k === 'rmsDb' || k === 'peakDb' ? -120 : 0)])) } : { available: false, reason: S.hasAudio ? 'Audio analyser failed to start.' : 'No audio track was captured.' };
-    tl.visual = { available: true, interval: STEP, ...Object.fromEntries(VIS_KEYS.map((k) => [k, fill(S.visual.feats[k], n, k === 'motionX' ? 0.5 : 0)])) };
+  /** Timeline snapshot. `from` (bins) lets live detection look only at a trailing window so cost stays flat on long streams. */
+  function snapshotTL(S, from = 0) {
+    const nAll = Math.max(S.visual.feats.motion.length, S.audio.feats.rmsDb.length); from = Math.min(from, Math.max(0, nAll - 1)); const n = nAll - from, off = from * STEP;
+    const fill = (arr, d = 0) => { const o = new Float32Array(n); for (let i = 0; i < n; i++) o[i] = arr[from + i] ?? d; return o; };
+    const segs = S.speech.segs.filter((g) => g.end > off).map((g) => ({ ...g, t: g.t - off, end: g.end - off }));
+    const tl = { projectId: 'live', step: STEP, duration: n * STEP, offset: off, speech: { available: S.speech.segs.length > 0 || !!S.speech.mon, segments: segs } };
+    tl.audio = S.audio.available ? { available: true, method: 'live', ...Object.fromEntries(AUDIO_KEYS.map((k) => [k, fill(S.audio.feats[k], k === 'rmsDb' || k === 'peakDb' ? -120 : 0)])) } : { available: false, reason: S.hasAudio ? 'Audio analyser failed to start.' : 'No audio track was captured.' };
+    tl.visual = { available: true, interval: STEP, ...Object.fromEntries(VIS_KEYS.map((k) => [k, fill(S.visual.feats[k], k === 'motionX' ? 0.5 : 0)])) };
     return tl;
   }
+  const WINDOW_BINS = Math.round(600 / STEP); // live detection looks at the latest 10 minutes
+  const shiftHl = (hl, off) => { if (!off) return hl; for (const k of ['start', 'end', 'eventStart', 'eventEnd', 'peak']) if (hl[k] != null) hl[k] = +(hl[k] + off).toFixed(2); return hl; };
   function liveDetect(S) {
     try {
-      const tl = snapshotTL(S); if (tl.duration < 12) return;
+      const nAll = Math.max(S.visual.feats.motion.length, S.audio.feats.rmsDb.length);
+      const tl = snapshotTL(S, Math.max(0, nAll - WINDOW_BINS)); if (tl.duration < 12) return;
       const res = detectHighlights(tl, { ...state.settings, maxCandidates: 50 }, state.prefs, { projectId: 'live', minAgeSec: 2 });
-      for (const hl of res.highlights) {
+      for (const hl of res.highlights.map((x) => shiftHl(x, tl.offset))) {
         if (S.flagged.some((f) => Math.abs(f.eventStart - hl.eventStart) < 6)) continue;
         S.flagged.push({ eventStart: hl.eventStart, start: hl.start, end: hl.end, score: hl.score, category: hl.category, why: hl.reasons[0] || '', hl, clip: 'pending' });
         S.buffer.protect(hl.start, hl.end); renderFlags(S);
@@ -172,8 +180,24 @@ export function mount(root) {
     S.flagged.push({ eventStart: t, start: from, end: t + state.settings.postRoll, score: null, category: 'manual', why: 'Marked manually', manual: true, clip: 'pending' }); renderFlags(S); toast('Moment marked and protected in the buffer.', 'success', 2000);
   }
   /** Cut finished moments out of the rolling buffer into their own clip projects while the capture keeps running. */
+  /** When nothing stands out for a while, still produce a clip: the best-scoring moment of the quiet stretch, clearly labelled low-evidence. */
+  function fallbackTick(S) {
+    if (!fbChk.checked) return; const sec = Math.max(20, +fbSec.value || 60); const el = S.elapsed();
+    const lastEnd = Math.max(S.fbFrom || 0, ...S.flagged.map((f) => f.end));
+    if (el - lastEnd < sec + 6) return;
+    const from = Math.floor(Math.max(lastEnd, el - sec - 6) / STEP);
+    const tl = snapshotTL(S, from); if (tl.duration < 12) return;
+    const sig = computeSignals(tl, state.settings); const base = baseScoreSeries(sig, state.settings.weights);
+    let bi = 2; for (let i = 2; i < base.length - 4; i++) if (base[i] > base[bi]) bi = i;
+    const hl = shiftHl(manualHighlight(tl, bi * STEP, state.settings, state.prefs, 'live'), tl.offset);
+    hl.manual = false; hl.lowEvidence = true; hl.title = `Best moment at ${fmtTime(hl.eventStart)}`;
+    hl.reasons.unshift(`No strong highlight in the last ~${Math.round(el - lastEnd)} s, so this is the best-scoring moment of that quiet stretch (low evidence — review before posting).`);
+    S.fbFrom = el; S.flagged.push({ eventStart: hl.eventStart, start: hl.start, end: hl.end, score: hl.score, category: hl.category, why: hl.reasons[0], hl, clip: 'pending', fallback: true });
+    S.buffer.protect(hl.start, hl.end); renderFlags(S);
+  }
   async function clipPump(S) {
-    if (S.cutting || S.ended || S.paused) return;
+    if (S.ended || S.paused) return; try { fallbackTick(S); } catch (e) { console.warn('fallback', e); }
+    if (S.cutting) return;
     const f = S.flagged.find((x) => x.clip === 'pending' && S.elapsed() >= x.end + 3);
     if (!f) return;
     S.cutting = true; f.clip = 'cutting'; renderFlags(S);
@@ -212,15 +236,21 @@ export function mount(root) {
     if (state.settings.liveAutoExport !== false) { const ex = await import('./export-center.js'); jobOf = ex.jobFor; dlJob = ex.downloadJob; ex.enqueueClip(hl); }
     await addHistory('capture', 'success', `Live clip cut at ${fmtTime(f.eventStart)}`, p);
   }
+  function previewJob(job) {
+    const url = URL.createObjectURL(job.result.blob);
+    const v = h('video', { src: url, controls: true, autoplay: true, playsinline: true, style: { maxHeight: '70vh', maxWidth: '100%', aspectRatio: '9 / 16', background: '#000', display: 'block', margin: '0 auto' } });
+    modal({ title: job.title || 'Clip preview (9:16)', body: v, onClose: () => { v.pause(); URL.revokeObjectURL(url); } });
+  }
   function renderFlags(S) {
     flagList.innerHTML = '';
     if (!S.flagged.length) return flagList.append(h('div', { class: 'help' }, 'Nothing flagged yet. Moments appear here as the engine detects them (a few seconds after they happen).'));
     [...S.flagged].reverse().forEach((f) => {
       const job = f.hlId ? jobOf(f.hlId) : null;
+      const pv = job?.status === 'done' ? h('button', { class: 'btn sm', onclick: () => previewJob(job) }, icon('play', 'sm'), 'Preview') : null;
       const dl = job?.status === 'done' ? h('button', { class: 'btn sm primary', onclick: () => dlJob(job) }, icon('download', 'sm'), 'Download 9:16 MP4')
         : job && job.status !== 'failed' && job.status !== 'cancelled' ? h('span', { class: 'tag orange' }, `${job.stage}${job.progress ? ' ' + Math.round(job.progress * 100) + '%' : ''}`)
         : job ? h('span', { class: 'tag red', 'data-tip': job.error || '' }, 'export failed — retry in Export Center') : null;
-      const st = f.clip === 'ready' ? h('span', { class: 'row' }, dl, h('a', { class: 'btn sm', href: '#/editor', onclick: () => { state.currentProjectId = f.projectId; state.currentHighlightId = f.hlId; } }, 'Edit'), h('a', { class: 'btn sm', href: '#/highlights', onclick: () => { state.currentProjectId = f.projectId; } }, 'Review'))
+      const st = f.clip === 'ready' ? h('span', { class: 'row' }, pv, dl, h('a', { class: 'btn sm', href: '#/editor', onclick: () => { state.currentProjectId = f.projectId; state.currentHighlightId = f.hlId; } }, 'Edit'), h('a', { class: 'btn sm', href: '#/highlights', onclick: () => { state.currentProjectId = f.projectId; } }, 'Review'))
         : f.clip === 'failed' ? h('span', { class: 'tag red', 'data-tip': f.err || '' }, 'clip failed')
         : h('span', { class: 'tag' }, f.clip === 'cutting' ? 'cutting clip…' : 'clip when moment ends');
       flagList.append(h('div', { class: 'list-item' }, f.thumb ? h('div', { class: 'thumb', style: { backgroundImage: `url(${f.thumb})` } }) : null, h('span', { class: 'tag ' + (f.score >= 80 ? 'red' : 'orange') }, f.score != null ? f.score : 'manual'), h('div', { class: 'li-main' }, h('div', { class: 't' }, `${fmtTime(f.eventStart)} · ${f.category}`), h('div', { class: 'm' }, f.why)), st));
@@ -230,7 +260,7 @@ export function mount(root) {
     const e = document.getElementById('rec-time'); if (e) e.textContent = fmtTime(S.elapsed());
     vu.firstChild.style.width = Math.min(100, S.level * 260) + '%';
     const st = S.buffer.stats(); bufStats.textContent = `${st.count} chunks · ${fmtBytes(st.bytes)} of ${fmtBytes(S.buffer.maxBytes)} cap · ${st.protectedCount} protected · ${st.evicted} evicted${st.overflow ? ' · ⚠ cap reached (protected chunks kept)' : ''}`;
-    bufBar.innerHTML = ''; const last = S.buffer.chunks.slice(-80); last.forEach((c) => bufBar.append(h('i', { class: c.header ? 'head' : c.prot ? 'prot' : '' })));
+    if (!S.barAt || performance.now() - S.barAt > 1000) { S.barAt = performance.now(); bufBar.replaceChildren(...S.buffer.chunks.slice(-80).map((c) => h('i', { class: c.header ? 'head' : c.prot ? 'prot' : '' }))); }
     if (!state.processing.active) setProcessing({ active: true, label: (S.paused ? 'Capture paused ' : 'Live capture ') + fmtTime(S.elapsed()), pct: 0, cancel: null, error: null });
   }
   function attach() {

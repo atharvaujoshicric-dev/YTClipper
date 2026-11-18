@@ -21,7 +21,7 @@ export const DEFAULTS = {
   // export
   exportResolution: '1080x1920', exportFormat: 'mp4', aspectRatio: '9:16', exportFps: 30, platform: 'both', cropMode: 'center',
   // live capture
-  captureQuality: '1080p30', bufferMaxMB: 1500, liveAudio: true, liveAutoExport: true, liveMic: false,
+  captureQuality: '1080p30', bufferMaxMB: 1500, liveAudio: true, liveAutoExport: true, liveFallback: true, liveFallbackSec: 60, liveMic: false,
   // storage
   storeMediaMaxMB: 400, audioDecodeMaxMB: 600,
   onboarded: false,
