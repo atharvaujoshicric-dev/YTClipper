@@ -96,7 +96,7 @@ async function renderClip(hl, proj, { w, h: hh, fps, format, bitrate }, { onProg
   const rec = new MediaRecorder(new MediaStream(tracks), { mimeType: mime, videoBitsPerSecond: bitrate, audioBitsPerSecond: 128000 });
   const chunks = []; rec.ondataavailable = (e) => e.data?.size && chunks.push(e.data);
   const stopped = new Promise((res) => (rec.onstop = res));
-  const cleanup = () => { try { rec.state !== 'inactive' && rec.stop(); } catch {} tracks.forEach((t) => t.stop()); try { ac?.close(); } catch {} disposeVideo(video); };
+  const cleanup = () => { try { rec.state !== 'inactive' && rec.stop(); } catch {} tracks.forEach((t) => t.stop()); try { ac?.close()?.catch?.(() => {}); } catch {} disposeVideo(video); };
   try {
     await seekTo(video, segs[0].start); renderFrame(ctx, video, hl, segs[0].start, 0, w, hh);
     rec.start(500); let acc = 0;
@@ -121,7 +121,7 @@ async function renderClip(hl, proj, { w, h: hh, fps, format, bitrate }, { onProg
     rec.stop(); await stopped;
     const blob = new Blob(chunks, { type: mime.split(';')[0] });
     return { blob, mime, ext: native ? 'mp4' : 'webm', native, warnings, duration: total };
-  } catch (e) { cleanup(); throw e; } finally { tracks.forEach((t) => t.stop()); try { ac?.close(); } catch {} disposeVideo(video); }
+  } catch (e) { cleanup(); throw e; } finally { tracks.forEach((t) => t.stop()); try { ac?.close()?.catch?.(() => {}); } catch {} disposeVideo(video); }
 }
 
 /** Verify the produced file by actually decoding it. Never report success without this. */
@@ -139,7 +139,7 @@ export async function verifyOutput(blob, { w, h, duration, expectAudio }) {
       try {
         const ac = new (window.AudioContext || window.webkitAudioContext)(); const buf = await ac.decodeAudioData(await blob.arrayBuffer()); let pk = 0;
         for (let c = 0; c < buf.numberOfChannels; c++) { const d = buf.getChannelData(c); for (let i = 0; i < d.length; i += 7) pk = Math.max(pk, Math.abs(d[i])); }
-        v.audio = pk > 1e-4 ? 'audible' : 'silent'; ac.close();
+        v.audio = pk > 1e-4 ? 'audible' : 'silent'; ac.close()?.catch?.(() => {});
       } catch { v.audio = 'undecodable'; }
     }
     v.ok = v.problems.length === 0;

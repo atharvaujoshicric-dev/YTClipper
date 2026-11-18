@@ -59,3 +59,6 @@ MP4 export first renders a WebM with MediaRecorder, then transcodes to H.264/AAC
 - Hooks/editing: `hook-intelligence.js`, `caption-engine.js`, `crop-engine.js`, `compositor.js`, `video-editor.js`.
 - Views: `dashboard.js`, `live-capture.js`, `video-upload.js`, `library.js`, `highlights.js`, `export-center.js`, `analytics.js`.
 - Export: `export-engine.js` (+ `vendor/ffmpeg`). `workers/` – analysis worker, audio-tap worklet.
+
+## Live clip cutting
+Clips are cut from the rolling buffer on real WebM cluster boundaries starting at a keyframe, and each is test-opened before it is saved. If a clip still cannot be built, it is marked failed in the list instead of producing a broken file. Exports retry once automatically.

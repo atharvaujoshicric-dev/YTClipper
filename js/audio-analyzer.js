@@ -50,7 +50,7 @@ export async function analyzeAudioFile(blob, { onProgress, signal, maxDecodeMB =
     const peakDb = Math.max(...features.peakDb);
     if (peakDb < -80) return { available: false, reason: 'The audio track is digital silence.', duration };
     return { available: true, step: AUDIO_STEP, features, duration, method: 'decode' };
-  } finally { try { ac.close(); } catch {} }
+  } finally { try { ac.close()?.catch?.(() => {}); } catch {} }
 }
 
 /** Fallback for very large files: play the (muted) video at 2x and tap its audio. */
@@ -80,7 +80,7 @@ export async function analyzeAudioRealtime(video, { onProgress, signal } = {}) {
   } catch (e) {
     if (e.name === 'AbortError') throw e;
     return { available: false, reason: 'Real-time audio tap failed: ' + e.message };
-  } finally { try { ac.close(); } catch {} }
+  } finally { try { ac.close()?.catch?.(() => {}); } catch {} }
 }
 
 /** Live audio meter on a MediaStream (screen-capture audio). Emits 0.5 s feature windows + a level for the VU meter. */
@@ -103,5 +103,5 @@ export class LiveAudioAnalyzer {
     }
     this.ok = true; return true;
   }
-  stop() { clearInterval(this._lv); try { this.ac?.close(); } catch {} }
+  stop() { clearInterval(this._lv); try { this.ac?.close()?.catch?.(() => {}); } catch {} }
 }

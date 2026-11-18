@@ -39,6 +39,71 @@ export class RollingBuffer {
   assemble(type) { return new Blob(this.chunks.map((c) => c.blob), { type }); }
 }
 
+// ---- WebM clip assembly. MediaRecorder chunks are arbitrary byte slices, NOT cluster-aligned, so a clip built from
+// "header chunk + some later chunks" can start or end mid-cluster and fail to open (DEMUXER_ERROR_COULD_NOT_OPEN).
+// We therefore cut on real Cluster boundaries found in the bytes.
+const CLUSTER_ID = [0x1f, 0x43, 0xb6, 0x75];
+function vintAt(u, p) { const b = u[p]; if (!b) return null; let len = 1, mask = 0x80; while (len <= 8 && !(b & mask)) { len++; mask >>= 1; } if (len > 8 || p + len > u.length) return null; let v = b & (mask - 1), unknown = (b & (mask - 1)) === mask - 1; for (let i = 1; i < len; i++) { v = v * 256 + u[p + i]; if (u[p + i] !== 0xff) unknown = false; } return { len, v, unknown }; }
+/** Index of the next plausible Cluster start at/after `from` (ID + size + a Timecode element), or -1. */
+export function findCluster(u, from = 0, last = false) {
+  let found = -1;
+  for (let i = from; i + 8 < u.length; i++) {
+    if (u[i] !== CLUSTER_ID[0] || u[i + 1] !== CLUSTER_ID[1] || u[i + 2] !== CLUSTER_ID[2] || u[i + 3] !== CLUSTER_ID[3]) continue;
+    const sz = vintAt(u, i + 4); if (!sz) continue; const next = i + 4 + sz.len;
+    if (u[next] !== 0xe7) continue; // clusters begin with a Timecode element
+    if (!last) return i; found = i;
+  }
+  return found;
+}
+const bytesOf = async (blobs) => new Uint8Array(await new Blob(blobs).arrayBuffer());
+function clusterTime(u, i) { // Cluster Timecode in seconds (WebM default timescale 1 ms)
+  const sz = vintAt(u, i + 4); if (!sz) return null; const p = i + 4 + sz.len; if (u[p] !== 0xe7) return null;
+  const l = vintAt(u, p + 1); if (!l || l.v > 6) return null; let v = 0; for (let k = 0; k < l.v; k++) v = v * 256 + u[p + 1 + l.len + k]; return v / 1000;
+}
+const idAt = (u, p) => { const b = u[p]; if (!b) return null; let len = 1, m = 0x80; while (len <= 4 && !(b & m)) { len++; m >>= 1; } if (len > 4 || p + len > u.length) return null; let id = 0; for (let i = 0; i < len; i++) id = id * 256 + u[p + i]; return { id, len }; };
+/** Track number of the video track, read from the init segment (falls back to 1). */
+function videoTrackNo(init) {
+  try {
+    for (let i = 0; i + 8 < init.length; i++) if (init[i] === 0x16 && init[i + 1] === 0x54 && init[i + 2] === 0xae && init[i + 3] === 0x6b) {
+      const sz = vintAt(init, i + 4); let p = i + 4 + sz.len; const end = Math.min(init.length, p + sz.v);
+      while (p < end) { const e = idAt(init, p); if (!e) break; const l = vintAt(init, p + e.len); if (!l) break; const bs = p + e.len + l.len, be = bs + l.v;
+        if (e.id === 0xae) { let q = bs, num = null, typ = null; while (q < be) { const c = idAt(init, q); if (!c) break; const cl = vintAt(init, q + c.len); if (!cl) break; const vs = q + c.len + cl.len; if (c.id === 0xd7) { num = 0; for (let k = 0; k < cl.v; k++) num = num * 256 + init[vs + k]; } if (c.id === 0x83) typ = init[vs]; q = vs + cl.v; } if (typ === 1 && num != null) return num; }
+        p = be; }
+    }
+  } catch {}
+  return 1;
+}
+/** True when the first video frame of the cluster at `p` is a keyframe (a clip must start on one or the decoder fails). */
+function clusterStartsWithKey(u, p, vt) {
+  const sz = vintAt(u, p + 4); if (!sz) return false; let q = p + 4 + sz.len; const end = Math.min(u.length, sz.unknown ? u.length : q + sz.v);
+  for (let n = 0; n < 60 && q < end; n++) {
+    const e = idAt(u, q); if (!e) return false; const l = vintAt(u, q + e.len); if (!l) return false; const bs = q + e.len + l.len;
+    if (e.id === 0xa3) { const tn = vintAt(u, bs); if (tn && tn.v === vt) return !!(u[bs + tn.len + 2] & 0x80); }
+    if (e.id === 0xa0) { const tn = vintAt(u, bs + 2); if (tn && tn.v === vt) return false; } // BlockGroup frames carry references
+    q = bs + l.v;
+  }
+  return false;
+}
+/** Builds a self-contained WebM for [cs,ce] from rolling-buffer chunks (init segment + whole clusters).
+ *  Returns { blob, from, to } (media time range actually contained) or null if it cannot. */
+export async function buildClipBlob(chunks, cs, ce, type = 'video/webm') {
+  const head = chunks[0]; if (!head) return null;
+  const hb = await bytesOf([head.blob]); const k0 = findCluster(hb, 0); if (k0 < 0) return null;
+  const init = hb.subarray(0, k0);
+  const sel = chunks.filter((c) => !c.header && c.t1 > cs - 12 && c.t0 < ce + 6); if (!sel.length) return null;
+  const bodyBlobs = (cs - 12 <= head.t1 ? [new Blob([hb.subarray(k0)])] : []).concat(sel.map((c) => c.blob));
+  const body = await bytesOf(bodyBlobs);
+  const vt = videoTrackNo(init);
+  const cl = []; for (let p = findCluster(body, 0); p >= 0; p = findCluster(body, p + 1)) { const t = clusterTime(body, p); if (t != null) cl.push({ p, t, key: clusterStartsWithKey(body, p, vt) }); }
+  if (cl.length < 2) return null; // need at least one whole cluster (the last one may be truncated)
+  let a = -1; for (let k = 0; k < cl.length - 1; k++) if (cl[k].t <= cs && cl[k].key) a = k; // last keyframe-led cluster at/before the clip start
+  if (a < 0) for (let k = 0; k < cl.length - 1; k++) if (cl[k].key) { a = k; break; } // otherwise the first one after it
+  if (a < 0) return null;
+  let b = cl.length - 1; for (let k = a + 1; k < cl.length; k++) if (cl[k].t > ce) { b = k; break; } // cut before the first cluster after the end (or drop the possibly truncated last one)
+  if (b <= a) return null;
+  return { blob: new Blob([init, body.subarray(cl[a].p, cl[b].p)], { type }), from: cl[a].t, to: cl[b].t };
+}
+
 const QUALITY = { '720p30': { w: 1280, h: 720, fps: 30 }, '1080p30': { w: 1920, h: 1080, fps: 30 }, '1080p60': { w: 1920, h: 1080, fps: 60 } };
 function pickMime() {
   const c = ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm;codecs=h264,opus', 'video/webm', 'video/mp4'];
@@ -208,17 +273,25 @@ export function mount(root) {
   async function cutClip(S, f) {
     const { getMediaUrl, getTimeline } = await import('./state.js');
     const cs = Math.max(0, f.start - 2), ce = Math.min(S.elapsed(), f.end + 2);
-    const head = S.buffer.chunks[0]; if (!head) throw new Error('buffer is empty');
-    const body = S.buffer.chunks.filter((c) => !c.header && c.t1 > cs && c.t0 < ce);
-    if (!body.length) throw new Error('that part of the recording is no longer in the buffer');
-    const blob = new Blob([head.blob, ...body.map((c) => c.blob)], { type: S.mime });
+    if (!S.buffer.chunks[0]) throw new Error('buffer is empty');
     const ext = S.mime.includes('mp4') ? 'mp4' : 'webm';
+    const okBlob = async (b) => { let v = null; try { v = await loadVideo(URL.createObjectURL(b)); return isFinite(v.duration) || v.duration > 0; } catch { return false; } finally { if (v) { const src = v.src; disposeVideo(v); try { URL.revokeObjectURL(src); } catch {} } } };
+    let blob = null, mFrom = 0, mTo = ce;
+    if (ext === 'webm') { const r = await buildClipBlob(S.buffer.chunks, cs, ce, S.mime); if (r && await okBlob(r.blob)) { blob = r.blob; mFrom = r.from; mTo = r.to; } }
+    if (!blob) { // fallback: contiguous recording from the start up to the clip end (always valid, larger) — only while still small
+      const upTo = S.buffer.chunks.filter((c) => c.t0 < ce + 1);
+      if (S.buffer.gaps.length > 0 || S.buffer.bytes > 250e6) throw new Error('could not build a playable clip from the buffer');
+      blob = new Blob(upTo.map((c) => c.blob), { type: S.mime }); mFrom = 0; mTo = ce;
+      if (!(await okBlob(blob))) throw new Error('could not build a playable clip from the buffer');
+    }
     const file = new File([blob], `live-clip-${Math.round(f.eventStart)}s.${ext}`, { type: S.mime });
     const tl = snapshotTL(S);
-    const p = newProject({ name: `Live clip ${fmtTime(f.eventStart)} · ${new Date().toLocaleTimeString()}`, source: 'live', liveClip: true, filename: file.name, size: file.size, mime: S.mime, duration: ce, width: S.dims.w, height: S.dims.h, fps: S.q.fps, hasAudio: S.audio.available, rights: true, rightsAt: Date.now(), status: 'analyzed', stats: { highlights: 1 }, analysisInfo: { audio: tl.audio.available ? { available: true, method: 'live' } : { available: false, reason: tl.audio.reason }, visual: { available: true, interval: STEP }, speech: tl.speech.available ? { available: true, segments: tl.speech.segments.length } : { available: false, reason: 'Speech detection was off or unsupported.' } } });
+    const p = newProject({ name: `Live clip ${fmtTime(f.eventStart)} · ${new Date().toLocaleTimeString()}`, source: 'live', liveClip: true, filename: file.name, size: file.size, mime: S.mime, duration: mTo, width: S.dims.w, height: S.dims.h, fps: S.q.fps, hasAudio: S.audio.available, rights: true, rightsAt: Date.now(), status: 'analyzed', stats: { highlights: 1 }, analysisInfo: { audio: tl.audio.available ? { available: true, method: 'live' } : { available: false, reason: tl.audio.reason }, visual: { available: true, interval: STEP }, speech: tl.speech.available ? { available: true, segments: tl.speech.segments.length } : { available: false, reason: 'Speech detection was off or unsupported.' } } });
     await attachMedia(p, file); tl.projectId = p.id; await saveTimeline(tl);
     let hl;
     if (f.hl) { hl = { ...f.hl, id: uid('hl'), projectId: p.id, createdAt: Date.now() }; } else { hl = manualHighlight(tl, f.eventStart, state.settings, state.prefs, p.id); }
+    // keep the clip inside the media that was actually cut (cluster-aligned)
+    hl.start = +Math.max(hl.start, mFrom + 0.05).toFixed(2); hl.end = +Math.min(hl.end, mTo - 0.05).toFixed(2); if (hl.end - hl.start < 2) throw new Error('clip would be too short');
     Object.assign(hl, generateHooks(hl, tl, state.settings, state.prefs));
     // on-screen text: hook line for the first 3 s (a creative template unless a heard phrase exists) + category tag; captions only from speech actually heard
     const sug = overlaySuggestions(hl, tl)[0];

@@ -180,10 +180,18 @@ export function once(el, ev, timeout = 15000, errEv = 'error') {
     el.addEventListener(ev, ok); el.addEventListener(errEv, bad);
   });
 }
-export async function seekTo(video, t, timeout = 8000) {
+export async function seekTo(video, t, timeout = 12000) {
   t = clamp(t, 0, Math.max(0, (video.duration || 1e9) - 0.001));
   if (Math.abs(video.currentTime - t) < 0.002 && video.readyState >= 2) return;
-  const p = once(video, 'seeked', timeout); video.currentTime = t; await p;
+  for (let attempt = 0; ; attempt++) {
+    const p = once(video, 'seeked', timeout); video.currentTime = t;
+    try { await p; return; } catch (e) {
+      // a busy machine can miss the event: accept if the position is right, otherwise retry once
+      if (video.readyState >= 2 && Math.abs(video.currentTime - t) < 0.3) return;
+      if (attempt >= 1 || video.error) throw e;
+      video.currentTime = Math.max(0, t - 0.05);
+    }
+  }
 }
 
 /** Load a <video> ready for decoding. Fixes Infinity duration on MediaRecorder WebM files. */

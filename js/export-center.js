@@ -30,9 +30,10 @@ async function runQueue() {
       setProcessing({ active: true, label: `Exporting “${hl.title}”`, pct: 0, cancel: () => abortCtl?.abort(), error: null });
       const t0 = performance.now();
       try {
-        const res = await exportClip(hl, proj, { resolution: state.settings.exportResolution, format: state.settings.exportFormat, fps: state.settings.exportFps || 30, coverTime: job.coverTime }, {
+        const run = () => exportClip(hl, proj, { resolution: state.settings.exportResolution, format: state.settings.exportFormat, fps: state.settings.exportFps || 30, coverTime: job.coverTime }, {
           signal: abortCtl.signal, onStage: (s) => { job.stage = s; job.status = s === 'Verifying' ? 'verifying' : s.startsWith('Encoding') ? 'encoding' : 'rendering'; bus.emit('exportq'); },
           onProgress: (p) => { job.progress = p; setProcessing({ pct: Math.round(p * 100) }); bus.emit('exportq'); } });
+        let res; try { res = await run(); } catch (e1) { if (e1.name === 'AbortError') throw e1; console.warn('export failed once, retrying', e1); job.stage = 'Retrying'; bus.emit('exportq'); await new Promise((r) => setTimeout(r, 1500)); res = await run(); }
         job.result = res; job.status = 'done'; job.stage = 'Done'; job.progress = 1; job.filename = filenameFor(job, res.ext);
         hl.exportedCount = (hl.exportedCount || 0) + 1; await saveHighlight(hl);
         await logExport({ id: job.id, projectId: proj.id, highlightId: hl.id, title: hl.title, status: 'done', ts: Date.now(), size: res.blob.size, format: res.ext, width: res.width, height: res.height, duration: res.duration, warnings: res.warnings, ms: Math.round(performance.now() - t0) });
