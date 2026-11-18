@@ -96,7 +96,7 @@ export function generateHooks(hl, tl, settings, prefs) {
 /** Plays hook segments in a <video> for `maxSec` output seconds; returns stop(). */
 export function playSegments(video, segs, maxSec = 3.5, onTick) {
   let i = 0, acc = 0, stopped = false, raf;
-  const begin = async () => { await seekTo(video, segs[0].start); video.muted = false; try { await video.play(); } catch { video.muted = true; await video.play().catch(() => {}); } loop(); };
+  const begin = async () => { await seekTo(video, segs[0].start).catch(() => {}); if (stopped) return; video.muted = false; try { await video.play(); } catch (e) { if (stopped || e.name === 'AbortError') return; video.muted = true; await video.play().catch(() => {}); } if (stopped) { video.pause(); return; } loop(); };
   const loop = async () => {
     if (stopped) return;
     const s = segs[i]; const out = acc + (video.currentTime - s.start);

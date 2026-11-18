@@ -66,8 +66,18 @@ export function mount(root) {
 
   // ---- playback
   async function togglePlay() { playing ? stopPlay() : await startPlay(); }
-  async function startPlay() { if (!video) return; if (outNow() >= total - 0.05) await seekOut(0); video.volume = Math.min(1, hl.volume ?? 1); try { await video.play(); playing = true; playBtn.replaceChildren(icon('pause')); } catch (e) { toast('Playback was blocked: ' + e.message, 'warn'); } }
-  function stopPlay() { playing = false; video?.pause(); playBtn.replaceChildren(icon('play')); }
+  let playTok = 0;
+  async function startPlay() {
+    if (!video) return; if (outNow() >= total - 0.05) await seekOut(0); video.volume = Math.min(1, hl.volume ?? 1);
+    const tok = ++playTok; playing = true; playBtn.replaceChildren(icon('pause'));
+    try { await video.play(); }
+    catch (e) {
+      if (tok !== playTok || e.name === 'AbortError') return; // interrupted by pause/seek/another click: not an error
+      if (e.name === 'NotAllowedError') { try { video.muted = true; await video.play(); toast('Browser blocked sound until you interact with the page — playing muted.', 'warn'); return; } catch (e2) { if (tok !== playTok || e2.name === 'AbortError') return; } }
+      playing = false; playBtn.replaceChildren(icon('play')); toast('Playback could not start: ' + e.message, 'warn');
+    }
+  }
+  function stopPlay() { playTok++; playing = false; video?.pause(); playBtn.replaceChildren(icon('play')); }
   let hopping = false;
   async function checkHop() {
     if (!playing || hopping || !video) return; const s = segs[segIdx];
